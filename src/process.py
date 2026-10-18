@@ -57,6 +57,7 @@ def pass_stats(log, key):
              "limit_attempt": "попытка" in phase, "n_s": len(g)}
         for c in MEAN_COLS:
             r[c] = g[c].mean()
+        r["N_rev"] = g["m2_rpm"].sum() * DT / 60.0   # оборотов двигателя хода на учётном участке
         r["power_max_kW"] = g["power_kW"].max()
         r["power_sd_kW"] = g["power_kW"].std()
         r["m2_current_max_A"] = g["m2_current_A"].max()
@@ -84,8 +85,17 @@ def derived(df):
     # прерванные (предельные) проходы делянку не завершили: скорость и производные не определяются
     d.loc[d["limit_attempt"], ["v_fact_kmh", "B_meas_m"]] = np.nan
     d["v_ms"] = d["v_fact_kmh"] / 3.6
-    # буксование: отношение пути, пройденного колесом, к фактическому пути
-    d["slip"] = 1.0 - d["v_fact_kmh"] / d["v_wheel_kmh"]
+    # буксование по ГОСТ 7057: δ = 1 − N0/N, где N и N0 — числа оборотов двигателя хода на учётном
+    # участке под нагрузкой и на холостом проходе той же сессии на той же передаче
+    d["slip"] = np.nan
+    for (ses, gear), g in d.groupby(["session", "gear"]):
+        idle = g[(g["kind"] == "холостой")]
+        if len(idle) == 0:
+            continue
+        N0 = idle["N_rev"].mean()
+        d.loc[g.index, "slip"] = 1.0 - N0 / g["N_rev"]
+        d.loc[g.index, "N0_rev"] = N0
+    d.loc[d["limit_attempt"], "slip"] = np.nan   # проход прерван до конца учётного участка
     # производительность за час основного времени, га/ч: W = 0,1·B·v
     B = d["B_meas_m"].fillna(np.nan)
     d["W_ha_h"] = 0.1 * B * d["v_fact_kmh"]

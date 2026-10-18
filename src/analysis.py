@@ -237,7 +237,8 @@ def monte_carlo(ps, regs, turn, wc, n=1000):
 
 
 def src_sensitivity(mc, smp, scen="S2"):
-    """Стандартизованные коэффициенты регрессии индекса I по параметрам (усреднение по режимам)."""
+    """Стандартизованные коэффициенты регрессии показателя I по параметрам (усреднение по режимам,
+    выполнимым обеими машинами в базовом расчёте; отбор режимов выполняется перед вызовом)."""
     g = mc[mc["scen"] == scen].groupby("it")["I"].mean()
     X = smp.loc[g.index]
     Z = (X - X.mean()) / X.std()
@@ -249,8 +250,8 @@ def src_sensitivity(mc, smp, scen="S2"):
 
 # --------------------------------------------------------------- зоны
 def zone_tech(p, m, turn, wc):
-    grids = {"культиватор": (np.linspace(0.06, 0.16, 41), np.linspace(3.0, 6.0, 41)),
-             "фреза": (np.linspace(0.06, 0.18, 41), np.linspace(1.5, 4.0, 41))}
+    grids = {"культиватор": (np.linspace(0.06, 0.16, 81), np.linspace(3.0, 6.0, 81)),
+             "фреза": (np.linspace(0.06, 0.18, 81), np.linspace(1.5, 4.0, 81))}
     rows = []
     for impl, (A, V) in grids.items():
         for a in A:
@@ -259,6 +260,11 @@ def zone_tech(p, m, turn, wc):
                 row = {"implement": impl, "a": a, "v": v, "P_el": r["P_el"], "P_shaft_D": r["P_shaft_D"],
                        "slip_ET": r["slip_ET"], "slip_D": r["slip_D"], "feas_ET": r["feas_ET"],
                        "feas_D": r["feas_D"], "cont_ET": r["cont_ET"]}
+                # относительные запасы до границ допустимости (для построения гладких границ зон)
+                sm = lambda d: 1 - d / p["slip_max"] if np.isfinite(d) else -1.0
+                row["mrg_ET"] = min(r["reserve_ET"], sm(r["slip_ET"])) if np.isfinite(r["P_el"]) else -1.0
+                row["mrg_D"] = min(r["reserve_D"], sm(r["slip_D"])) if np.isfinite(r["P_shaft_D"]) else -1.0
+                row["mrg_cont"] = min(row["mrg_ET"], 1 - r["P_shaft_ET"] / p["P_mot_1h"]) if np.isfinite(r["P_el"]) else -1.0
                 for sc, St in SCEN.items():
                     q = dict(p, S_task=St)
                     rr, s, e, ET, D = evaluate(impl, a, v, q, m, turn)
@@ -282,13 +288,17 @@ def zone_org(p, m, turn, wc):
     rows = []
     for impl, (a, v) in REP.items():
         for St in np.linspace(0.1, 4.0, 40):
-            for l in np.linspace(0.0, 5.0, 26):
+            for l in np.linspace(0.0, 4.0, 21):
                 q = dict(p, S_task=St, l_charge_km=l)
                 r, s, e, ET, D = evaluate(impl, a, v, q, m, turn)
                 d = rel_advantage(ET, D)
+                E_use = p["E_bat_kWh"] * (p["SOC_max"] - p["SOC_min"]) / 100
+                E_tr = p["P_transp_kW"] * l / p["v_transp_kmh"]
                 rows.append({"implement": impl, "S_task": St, "l_km": l, "I": sum(wc[c] * d[c] for c in CODES),
                              "S_shift_ET": s["S_shift_ET"], "S_shift_D": s["S_shift_D"],
-                             "A_charge": s["t_auton_ET"] / s["t_ha"], "n_charge": s["n_charge_shift"]})
+                             "A_charge": s["t_auton_ET"] / s["t_ha"],
+                             "A_one": max(0.0, (E_use - 2 * E_tr) / s["e_bat_ha"]),
+                             "n_charge": s["n_charge_shift"]})
     return pd.DataFrame(rows)
 
 
@@ -393,7 +403,9 @@ def main():
         I_mean=("I", "mean"), I_p05=("I", lambda x: x.quantile(0.05)), I_p95=("I", lambda x: x.quantile(0.95)),
         P_pos=("I", lambda x: (x > 0).mean()), P_cost=("dC_tot", lambda x: (x < 0).mean())).reset_index()
     mcs.to_csv(T / "mc_summary.csv", index=False, encoding="utf-8-sig")
-    src = {sc: src_sensitivity(mc, smp, sc) for sc in SCEN}
+    both = cmp["S1"][cmp["S1"]["feas_ET"] & cmp["S1"]["feas_D"]][["implement", "a", "v"]]
+    mcb = mc.merge(both, on=["implement", "a", "v"])
+    src = {sc: src_sensitivity(mcb, smp, sc) for sc in SCEN}
     pd.DataFrame({sc: src[sc][0] for sc in SCEN}).to_csv(T / "sensitivity_src.csv", encoding="utf-8-sig")
 
     zt = zone_tech(p, m, turn, wc)

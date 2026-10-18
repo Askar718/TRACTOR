@@ -1,6 +1,6 @@
 """Сборка отчёта о НИР и отдельного документа ПМИ (DOCX), двухпроходная — для содержания.
 
-Запуск: python3 src/build_report.py  (после analysis.py и figures.py)
+Запуск: python3 src/build_report.py  (после analysis.py, export_matlab.py и построения рисунков matlab/make_all.m)
 """
 import re
 import shutil
@@ -43,8 +43,8 @@ def compose(files, out, h=900, labels=True):
         canvas.paste(im, (x, 0))
         if lab:
             d = ImageDraw.Draw(canvas)
-            t = "абвгд"[i]
-            d.text((x + im.width // 2 - 12, h + 8), t, fill="black", font=font)
+            t = "абвгд"[i] + ")"
+            d.text((x + im.width // 2 - 20, h + 8), t, fill="black", font=font)
         x += im.width + gap
     canvas.save(FIG / out, quality=88)
 

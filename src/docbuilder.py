@@ -347,7 +347,11 @@ class Report:
             gc.set(qn("w:w"), str(int(w / 2.54 * 1440)))
 
     # ------------------------------------------------------------ рисунки
-    def fig(self, path, caption, width=16.0):
+    def fig(self, path, caption, width=None):
+        if width is None:   # натуральная величина рисунка, построенного с разрешением 300 точек на дюйм
+            from PIL import Image
+            with Image.open(path) as im:
+                width = min(16.5, im.width / 300 * 2.54)
         self.n_fig += 1
         self.counts["fig"] += 1
         num = self._num(self.n_fig)
@@ -365,6 +369,18 @@ class Report:
         cap.paragraph_format.space_after = Pt(6)
         self._runs(cap, f"Рисунок {num} – {caption}")
         return num
+
+    def note(self, text):
+        """Примечание к таблице (ГОСТ 7.32-2017, 6.6.8): с абзацного отступа, после таблицы."""
+        par = self.d.add_paragraph()
+        pf = par.paragraph_format
+        pf.first_line_indent = Cm(1.25)
+        pf.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        pf.line_spacing = 1.0
+        pf.space_before = Pt(3)
+        pf.space_after = Pt(6)
+        self._runs(par, f"Примечание – {text}", size=12)
+        return par
 
     # ------------------------------------------------------------ содержание
     def toc_placeholder(self):

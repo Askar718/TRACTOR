@@ -16,11 +16,11 @@ B_NOM = {"культиватор": 1.20, "фреза": 1.25}  # м, констр
 
 
 # ---------------------------------------------------------------- подбор моделей
-def slip_curve(phi_n, phi_max, k, d0):
-    """Тяговая характеристика по коэффициенту использования веса на крюке φ_н = R/G:
-    φ_н = φ_max·(1 − exp(−k·(δ − δ0)))  ⇒  δ = δ0 − ln(1 − φ_н/φ_max)/k,
-    δ0 — буксование при самопередвижении (φ_н = 0)."""
-    return d0 - np.log(1.0 - np.clip(phi_n / phi_max, 0, 0.999999)) / k
+def slip_curve(phi, phi_max, k, d0=0.0):
+    """Кривая буксования по коэффициенту использования сцепного веса φ = R/G:
+    φ = φ_max·(1 − exp(−k·δ))  ⇒  δ = −ln(1 − φ/φ_max)/k.
+    Буксование отсчитывается от холостого прохода (ГОСТ 7057), поэтому δ(0) = 0."""
+    return d0 - np.log(1.0 - np.clip(phi / phi_max, 0, 0.999999)) / k
 
 
 def fit_models(passes, p):
@@ -29,17 +29,16 @@ def fit_models(passes, p):
     g, eta_ep, eta_tr = p["g"], p["eta_ep"], p["eta_tr"]
     ok = passes[~passes["limit_attempt"]].copy()
 
-    # --- культиватор: сопротивление качению и тяговое сопротивление
+    # --- культиватор: сопротивление передвижению и тяговое сопротивление
     c = ok[ok["implement"] == "культиватор"].copy()
     c0 = c[c["kind"] == "холостой"]
     c1 = c[c["kind"] == "рабочий"].copy()
-    vt0 = c0["v_wheel_kmh"] / 3.6
-    Fk0 = eta_ep * eta_tr * (c0["power_kW"] - p["P_aux"]) * 1e3 / vt0
+    Fk0 = eta_ep * eta_tr * (c0["power_kW"] - p["P_aux"]) * 1e3 / (c0["v_fact_kmh"] / 3.6)
     f_roll = (Fk0 / (p["m_ET"] * g)).mean()
     m["f_roll"] = f_roll
     Ff = f_roll * p["m_ET"] * g
-    vt = c1["v_wheel_kmh"] / 3.6
-    c1["Fk_N"] = eta_ep * eta_tr * (c1["power_kW"] - p["P_aux"]) * 1e3 / vt
+    # касательная сила тяги: F_к = η_эп·η_тр·(P − P_всп)·(1 − δ)/v
+    c1["Fk_N"] = eta_ep * eta_tr * (c1["power_kW"] - p["P_aux"]) * 1e3 * (1 - c1["slip"]) / (c1["v_fact_kmh"] / 3.6)
     c1["R_N"] = c1["Fk_N"] - Ff
     c1["k_Nm2"] = c1["R_N"] / (c1["B_meas_m"] * c1["a_meas_mean_m"])
     X = np.column_stack([np.ones(len(c1)), (c1["v_fact_kmh"] / 3.6) ** 2])
@@ -48,38 +47,38 @@ def fit_models(passes, p):
     pred = X @ coef
     ss = ((c1["k_Nm2"] - c1["k_Nm2"].mean()) ** 2).sum()
     m["k_R2"] = 1 - ((c1["k_Nm2"] - pred) ** 2).sum() / ss
-    # тяговая характеристика δ(φ_н) по рабочим проходам; δ0 — по самопередвижению
-    d0 = c0["slip"].mean()
+    # кривая буксования δ(φ), φ = R/G
     c1["phi_n"] = c1["R_N"] / (p["m_ET"] * g)
     phi, dl = c1["phi_n"].values, c1["slip"].values
-    f = lambda d, a, b: a * (1 - np.exp(-b * (d - d0)))
-    (phi_max, k), _ = curve_fit(f, dl, phi, p0=(0.8, 5.0), bounds=([0.5, 0.1], [1.0, 100.0]), maxfev=20000)
-    m["phi_max"], m["k_slip"], m["d0"] = phi_max, k, d0
+    f = lambda d, a, b: a * (1 - np.exp(-b * d))
+    (phi_max, k), _ = curve_fit(f, dl, phi, p0=(0.8, 5.0), bounds=([0.4, 0.1], [1.0, 200.0]), maxfev=20000)
+    m["phi_max"], m["k_slip"], m["d0"] = phi_max, k, 0.0
     ph_pred = f(dl, phi_max, k)
     m["slip_R2"] = 1 - ((phi - ph_pred) ** 2).sum() / ((phi - phi.mean()) ** 2).sum()
-    dl_pred = slip_curve(phi, phi_max, k, d0)
+    dl_pred = slip_curve(phi, phi_max, k)
     m["slip_rmse"] = float(np.sqrt(((dl - dl_pred) ** 2).mean()))
     m["cult_points"] = c1
 
-    # --- фреза: P_эл = P_всп + c_v·v + P_р0 + A·B·a·v, A = A0 + A1·v + A2·a
+    # --- фреза: P = P_всп + c_дв·v + P_р0 + A·B·a·v, A = A0 + A1·v + A2·a
     t = ok[ok["implement"] == "фреза"]
     t0 = t[t["kind"] == "холостой"]
     t1 = t[t["kind"] == "рабочий"].copy()
-    c_v = ((t0["power_kW"] - p["P_aux"]) / (t0["v_wheel_kmh"] / 3.6)).mean()  # кВт/(м/с), колёсный привод
+    c_v = ((t0["power_kW"] - p["P_aux"]) / (t0["v_fact_kmh"] / 3.6)).mean()  # кВт/(м/с)
     m["c_move"] = c_v
-    m["P_rot0"] = p.get("P_rot0_el", 0.98)  # кВт, холостое вращение ротора сверх P_всп (изм.)
+    m["P_rot0"] = p.get("P_rot0_el", 0.98)
     v = t1["v_fact_kmh"] / 3.6
-    vt = t1["v_wheel_kmh"] / 3.6
     q = t1["B_meas_m"] * t1["a_meas_mean_m"] * v
-    t1["P_till_kW"] = t1["power_kW"] - p["P_aux"] - c_v * vt - m["P_rot0"]
-    t1["A_kJm3"] = t1["P_till_kW"] / q  # электрическая энергия на 1 м³
+    t1["P_till_kW"] = t1["power_kW"] - p["P_aux"] - c_v * v - m["P_rot0"]
+    t1["A_kJm3"] = t1["P_till_kW"] / q
     X = np.column_stack([np.ones(len(t1)), t1["v_fact_kmh"], t1["a_meas_mean_m"]])
     coef, *_ = np.linalg.lstsq(X, t1["A_kJm3"].values, rcond=None)
     m["A0"], m["A1"], m["A2"] = coef
     pred = X @ coef
     m["A_R2"] = 1 - ((t1["A_kJm3"] - pred) ** 2).sum() / ((t1["A_kJm3"] - t1["A_kJm3"].mean()) ** 2).sum()
     m["till_points"] = t1
-    m["slip_till"] = t1["slip"].mean()
+    # буксование с фрезой относительно холостого прохода (определено на передаче П2)
+    m["slip_till_meas"] = float(t1["slip"].mean())
+    m["slip_till"] = 0.0
 
     # --- пульсации мощности: коэффициент вариации в зачётной зоне
     w = ok[ok["kind"] == "рабочий"]
@@ -103,7 +102,7 @@ def power_point(impl, a, v_kmh, p, m):
             if phi >= 0.995 * m["phi_max"]:
                 out[mach] = (np.nan, np.nan, np.nan)
                 continue
-            d = float(slip_curve(phi, m["phi_max"], m["k_slip"], m["d0"]))
+            d = float(slip_curve(phi, m["phi_max"], m["k_slip"]))
             P_shaft = Fk * v / (1 - d) / p["eta_tr"] / 1e3
             out[mach] = (P_shaft, d, phi)
         r["R_kN"] = R / 1e3
@@ -113,7 +112,7 @@ def power_point(impl, a, v_kmh, p, m):
         r["P_el"] = p["P_aux"] + r["P_shaft_ET"] / p["eta_ep"]
     else:
         d = m["slip_till"]
-        vt = v / (1 - d)
+        vt = v
         A = m["A0"] + m["A1"] * v_kmh + m["A2"] * a
         P_till = A * B * a * v
         P_move = m["c_move"] * vt
@@ -129,7 +128,7 @@ def power_point(impl, a, v_kmh, p, m):
     r["feas_ET"] = bool(np.isfinite(r["P_el"]) and r["reserve_ET"] >= 0 and r["slip_ET"] <= p["slip_max"])
     r["feas_D"] = bool(np.isfinite(r["P_shaft_D"]) and r["reserve_D"] >= 0 and r["slip_D"] <= p["slip_max"])
     r["cont_ET"] = bool(r["feas_ET"] and r["P_shaft_ET"] <= p["P_mot_1h"])
-    # часовой расход топлива Д при полной подаче (ASABE D497.7, линейная форма)
+    # часовой расход топлива Д на регуляторной ветви (ASABE D497.7, линейная форма)
     r["Q_Lh"] = p["k_D"] * (p["sfc_a"] * r["P_shaft_D"] + p["sfc_b"] * P_pto_nom)
     r["X_D"] = r["P_shaft_D"] / P_pto_nom
     return r
@@ -262,16 +261,16 @@ def economics(r, s, p):
 # ------------------------------------------------------------- система критериев
 CRITERIA = [
     # код, группа, наименование, ед., направление (+1 больше — лучше; −1 меньше — лучше)
-    ("I1", "Энергетические", "Удельный расход энергии из внешнего источника", "МДж/га", -1),
-    ("I2", "Энергетические", "Удельный расход первичной энергии", "МДж/га", -1),
+    ("I1", "Энергетические", "Удельные затраты подведённой энергии", "МДж/га", -1),
+    ("I2", "Энергетические", "Удельные затраты первичной энергии", "МДж/га", -1),
     ("I3", "Технологические", "Коэффициент выполнения сменного задания", "–", +1),
     ("I4", "Технологические", "Буксование движителей", "%", -1),
-    ("I5", "Технологические", "Резерв мощности силовой установки", "%", +1),
+    ("I5", "Технологические", "Запас мощности", "%", +1),
     ("I6", "Экономические", "Удельные прямые эксплуатационные затраты", "тг/га", -1),
     ("I7", "Экономические", "Удельные совокупные затраты", "тг/га", -1),
-    ("I8", "Экологические", "Полная эмиссия CO2 (с учётом генерации)", "кг/га", -1),
-    ("I9", "Экологические", "Эмиссия CO2 в зоне выполнения работ", "кг/га", -1),
-    ("I10", "Автономность", "Обеспеченность сменного задания запасом энергии", "–", +1),
+    ("I8", "Экологические", "Удельные выбросы CO₂ с учётом производства энергии", "кг/га", -1),
+    ("I9", "Экологические", "Удельные выбросы CO₂ в месте выполнения работ", "кг/га", -1),
+    ("I10", "Автономность", "Доля сменного задания, выполняемая без восполнения энергии", "–", +1),
 ]
 GROUPS = ["Энергетические", "Технологические", "Экономические", "Экологические", "Автономность"]
 
