@@ -1,5 +1,5 @@
 function fig_thermal()
-% Тепловой режим двигателя хода.
+% Тепловой режим тягового электродвигателя.
 C = rp_init();
 D = rp_read('thermal_T1'); F = rp_read('thermal_fit'); Mo = rp_read('models');
 R = mean(F.R_K_per_kW);
@@ -8,7 +8,7 @@ ax = rp_ax(f, [1.7, 3.5, 7.2, 5.4]);
 plot(ax, D.t_min, D.T, '-', 'Color', C.et, 'LineWidth', 1.5);
 plot(ax, D.t_min, D.Tm, '--', 'Color', [0.1 0.1 0.1], 'LineWidth', 1.1);
 xlim(ax, [0 150]); ylim(ax, [10 40]);
-xlabel(ax, 'Время, мин'); ylabel(ax, 'Температура двигателя хода, °C');
+xlabel(ax, 'Время, мин'); ylabel(ax, 'Температура тягового электродвигателя, °C');
 rp_comma(ax, 'xy'); rp_panel(ax, 'а)', 1.25);
 rp_key(f, [0.9, 0.1, 7.8, 0.9], {{'измерение', C.et, '-', 'none'}, {'модель', [0.1 0.1 0.1], '--', 'none'}}, 2);
 ax = rp_ax(f, [10.6, 3.5, 5.7, 5.4]);

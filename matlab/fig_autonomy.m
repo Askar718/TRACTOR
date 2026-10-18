@@ -1,5 +1,5 @@
 function fig_autonomy()
-% Площадь, обрабатываемая на одной зарядке, и сменная выработка.
+% Площадь, обрабатываемая без подзарядки, и сменная выработка.
 C = rp_init();
 S = rp_read('compare_S1');
 n = numel(S.a);
@@ -10,7 +10,7 @@ ax = rp_ax(f, [2.5, 3.0, 5.6, 9.6]);
 barh(ax, 1:n, S.Acharge, 0.6, 'FaceColor', C.et, 'EdgeColor', 'none');
 set(ax, 'YDir', 'reverse', 'YTick', 1:n, 'YTickLabel', lab, 'YGrid', 'off');
 ylim(ax, [0.4 n + 0.6]); xlim(ax, [0 1]);
-xlabel(ax, 'Площадь на одной зарядке, га');
+xlabel(ax, 'Площадь без подзарядки, га');
 rp_comma(ax, 'x'); rp_panel(ax, 'а)', 1.2);
 ax = rp_ax(f, [9.4, 3.0, 6.9, 9.6]);
 h = barh(ax, 1:n, [S.SET S.SD], 0.8, 'grouped');

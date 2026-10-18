@@ -1,5 +1,5 @@
 function fig_diesel()
-% Модель расхода топлива дизельного аналога (ASAE D497.7).
+% Модель расхода топлива дизельного аналога (ASABE D497.7).
 C = rp_init();
 Mo = rp_read('models'); S = rp_read('compare_S1');
 Pn = Mo.P_pto_nom;
@@ -19,7 +19,7 @@ plot(ax, S.X(S.impl == 2), 1000 * Mo.rho_D * (Mo.sfc_a + Mo.sfc_b ./ S.X(S.impl 
 xlim(ax, [0 1]); ylim(ax, [200 800]);
 xlabel(ax, 'Загрузка X = P/P_{ВОМ ном}'); ylabel(ax, 'Удельный расход топлива, г/(кВт·ч)');
 rp_comma(ax, 'xy'); rp_panel(ax, 'б)', 1.25);
-items = {{'модель ASAE D497.7', C.d, '-', 'none'}, {'режимы с культиватором', [0.1 0.1 0.1], 'none', 'o', 'line', 'hollow'}, ...
+items = {{'модель ASABE D497.7', C.d, '-', 'none'}, {'режимы с культиватором', [0.1 0.1 0.1], 'none', 'o', 'line', 'hollow'}, ...
          {'режимы с фрезой', [0.1 0.1 0.1], 'none', 's', 'line', 'hollow'}};
 rp_key(f, [0.9, 0.15, 15.4, 0.7], items, 3);
 rp_save(f, 'm_diesel');

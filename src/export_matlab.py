@@ -113,7 +113,7 @@ def main():
     tf = pd.read_csv(T / "thermal_fit.csv")
     w("thermal_fit", tf[["T_amb_C", "tau_s", "R_K_per_kW", "rmse_K", "T_max_C"]])
     v = pd.read_csv(T / "model_validation.csv")
-    w("validation", pd.DataFrame({"impl": v.implement.map(IMPL), "Pm": v.P_meas, "Pc": v.P_model}))
+    w("validation", pd.DataFrame({"impl": v.implement.map(IMPL), "Pm": v.P_meas, "Pc": v.P_model, "Pcv": v.P_cv}))
 
     # 7. сравнение
     for sc in ("S1", "S2"):
@@ -160,6 +160,7 @@ def main():
         wmat(f"zo_{key}_S", Sx); wmat(f"zo_{key}_L", L)
         wmat(f"zo_{key}_I", g.pivot(index="l_km", columns="S_task", values="I").reindex(index=L, columns=Sx).values)
         wmat(f"zo_{key}_Ach", g.groupby("l_km").A_one.mean().reindex(L).values)
+        wmat(f"zo_{key}_Scap", g.groupby("l_km").S_shift_ET.max().reindex(L).values)
     ze = pd.read_csv(T / "zone_econ.csv")
     for impl, key in (("культиватор", "cult"), ("фреза", "till")):
         g = ze[ze.implement == impl]

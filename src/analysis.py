@@ -73,7 +73,8 @@ def anova(ps):
         V = pd.get_dummies(g["v_plan_kmh"], drop_first=True, dtype=float)
         cell = pd.get_dummies(g["a_plan_m"].astype(str) + "_" + g["v_plan_kmh"].astype(str), drop_first=True, dtype=float)
         one = np.ones((len(g), 1))
-        X = [np.hstack([one, blk]), np.hstack([one, blk, A]), np.hstack([one, blk, A, V]), np.hstack([one, blk, cell])]
+        X = [np.hstack([one, blk]), np.hstack([one, blk, A]), np.hstack([one, blk, A, V]), np.hstack([one, blk, cell]),
+             np.hstack([one, blk, V])]
         for y in ("e_kWh_ha", "power_kW"):
             yy = g[y].values
             rss, rk = [], []
@@ -86,8 +87,11 @@ def anova(ps):
                     ("Скорость v", rss[1] - rss[2], rk[2] - rk[1]), ("Взаимодействие a×v", rss[2] - rss[3], rk[3] - rk[2])]
             df_e = len(yy) - rk[3]
             ms_e = rss[3] / df_e
+            # суммы квадратов главных эффектов, скорректированные на другой фактор (тип II)
+            adj = {"Глубина a": rss[4] - rss[2], "Скорость v": rss[1] - rss[2]}
             tab = pd.DataFrame([{"source": n, "df": d, "SS": ss, "MS": ss / d, "F": ss / d / ms_e,
-                                 "p": stats.f.sf(ss / d / ms_e, d, df_e), "eta2": ss / sst} for n, ss, d in rows]
+                                 "p": stats.f.sf(ss / d / ms_e, d, df_e), "eta2": ss / sst,
+                                 "eta2_adj": adj.get(n, np.nan) / sst} for n, ss, d in rows]
                                + [{"source": "Остаток", "df": df_e, "SS": rss[3], "MS": ms_e, "F": np.nan, "p": np.nan, "eta2": rss[3] / sst},
                                   {"source": "Итого", "df": len(yy) - 1, "SS": sst, "MS": np.nan, "F": np.nan, "p": np.nan, "eta2": 1.0}])
             out[(impl, y)] = tab
@@ -120,21 +124,24 @@ def regressions(m):
 def uncertainty(reg):
     """Бюджет неопределённости удельного расхода энергии e = P/(0,1·B·v) по ГОСТ 34100.3."""
     uB_P = np.sqrt((0.01 / np.sqrt(3)) ** 2 + (0.005 / np.sqrt(3)) ** 2)   # ток ±1 %, напряжение ±0,5 % (равномерн.)
-    uB_v = np.sqrt((0.1 / 100 / np.sqrt(3)) ** 2 + (0.1 / 100 / np.sqrt(3)) ** 2)  # путь ±0,1 м; время ±0,1 с на ≥66 с
+    uB_v = np.sqrt((0.1 / 100 / np.sqrt(3)) ** 2 + (0.5 / 66 / np.sqrt(3)) ** 2)  # путь ±0,1 м на 100 м; время ±0,5 с на ≥66 с
     uB_B = 0.01 / 1.2 / np.sqrt(3)
     uB = np.sqrt(uB_P ** 2 + uB_v ** 2 + uB_B ** 2)
     rows = []
     for _, r in reg.iterrows():
         uA = r["e_sd"] / np.sqrt(r["n"]) / r["e_mean"]
         uc = np.sqrt(uA ** 2 + uB ** 2)
+        # эффективное число степеней свободы (формула Уэлча – Саттертуэйта; для u_B — бесконечно)
+        nu = min(uc ** 4 / (uA ** 4 / (r["n"] - 1)), 1e6)
+        k = stats.t.ppf(0.975, nu)
         rows.append({"implement": r["implement"], "a": r["a_plan"], "v": r["v_plan"], "e": r["e_mean"],
-                     "uA_pct": 100 * uA, "uB_pct": 100 * uB, "uc_pct": 100 * uc, "U95_pct": 200 * uc,
-                     "U95_abs": 2 * uc * r["e_mean"]})
+                     "uA_pct": 100 * uA, "uB_pct": 100 * uB, "uc_pct": 100 * uc, "nu_eff": nu, "k": k,
+                     "U95_pct": 100 * k * uc, "U95_abs": k * uc * r["e_mean"]})
     return pd.DataFrame(rows), {"uB_P": uB_P, "uB_v": uB_v, "uB_B": uB_B, "uB": uB}
 
 
 def thermal_fit():
-    """Тепловая модель первого порядка двигателя хода: τ·dT/dt = T_окр + R_т·P − T."""
+    """Тепловая модель первого порядка тягового электродвигателя: τ·dT/dt = T_окр + R_т·P − T."""
     from scipy.optimize import least_squares
     rows = []
     for key, stem in (("C", "cultivator_2026-09-15"), ("T1", "tiller_2026-10-14_session1"),
@@ -174,6 +181,10 @@ def compare(regs, p, m, turn, S_task):
         q = dict(p, S_task=S_task)
         r, s, e, ET, D = evaluate(impl, a, v, q, m, turn)
         row = {"implement": impl, "a": a, "v": v, **{k: r[k] for k in r if k not in ("impl",)}}
+        # все режимы из regs выполнены электротрактором в трёх повторностях: выполнимость для ЭТ
+        # установлена опытом; оценка по критерию (3.7) сохраняется для справки
+        row["feas_ET_model"] = row["feas_ET"]
+        row["feas_ET"] = True
         if s is not None:
             row.update({f"s_{k}": val for k, val in s.items()})
             row.update({f"e_{k}": val for k, val in e.items()})
@@ -195,9 +206,16 @@ def weights(cmp_S1):
     tab = pd.concat([feas[[f"ET_{c}" for c in CODES]].set_axis(CODES, axis=1),
                      feas[[f"D_{c}" for c in CODES]].set_axis(CODES, axis=1)], ignore_index=True)
     we = entropy_weights(tab)
-    wc = {c: 0.5 * ah["w"][c] + 0.5 * we[c] for c in CODES}
-    sw = sum(wc.values())
-    wc = {c: x / sw for c, x in wc.items()}
+    # веса групп — по МАИ (суждение о значимости свойств); внутри группы локальные веса МАИ и
+    # энтропийные (нормированные в пределах группы) объединяются с равными долями α = 0,5
+    wc = {}
+    for g in GROUPS:
+        codes = [c[0] for c in CRITERIA if c[1] == g]
+        le = np.array([we[c] for c in codes]); le = le / le.sum()
+        la = np.array([ah["local"][g][c] for c in codes])
+        lc = 0.5 * la + 0.5 * le
+        for c, x in zip(codes, lc / lc.sum()):
+            wc[c] = ah["groups"][g] * x
     return ah, we, wc, tab
 
 
@@ -287,8 +305,8 @@ REP = {"культиватор": (0.11, 4.5), "фреза": (0.12, 2.7)}
 def zone_org(p, m, turn, wc):
     rows = []
     for impl, (a, v) in REP.items():
-        for St in np.linspace(0.1, 4.0, 40):
-            for l in np.linspace(0.0, 4.0, 21):
+        for St in np.linspace(0.05, 2.0, 79):
+            for l in np.linspace(0.0, 4.0, 41):
                 q = dict(p, S_task=St, l_charge_km=l)
                 r, s, e, ET, D = evaluate(impl, a, v, q, m, turn)
                 d = rel_advantage(ET, D)
@@ -350,8 +368,10 @@ def measures(p, m, turn, wc):
                 r, s, e, ET, D = evaluate(impl, a, v, q, m, turn)
                 d = rel_advantage(ET, D)
                 out[f"I_{sc}"] = sum(wc[c] * d[c] for c in CODES)
-            out.update({"S_shift_ET": s["S_shift_ET"], "S_shift_D": s["S_shift_D"],
-                        "A_charge": s["t_auton_ET"] / s["t_ha"], "C_tot_ET": e["C_tot_ET"], "C_tot_D": e["C_tot_D"]})
+                out[f"C_tot_ET_{sc}"], out[f"C_tot_D_{sc}"] = e["C_tot_ET"], e["C_tot_D"]
+                if sc == "S1":                  # сменная выработка и затраты таблицы мер – для полной смены
+                    out.update({"S_shift_ET": s["S_shift_ET"], "S_shift_D": s["S_shift_D"],
+                                "A_charge": s["t_auton_ET"] / s["t_ha"], "C_tot_ET": e["C_tot_ET"], "C_tot_D": e["C_tot_D"]})
             rows.append(out)
     return pd.DataFrame(rows)
 
@@ -389,11 +409,18 @@ def main():
                   "w": [wc[c] for c in CODES]}).to_csv(T / "weights.csv", index=False, encoding="utf-8-sig")
 
     # проверка модели по измеренной мощности
+    # согласование модели с опытом и перекрёстная проверка с исключением режима (модель
+    # строится без проходов проверяемого режима и предсказывает его мощность)
     val = []
     for _, r in reg.iterrows():
         pp = power_point(r["implement"], r["a_mean"], r["v_mean"], p, m)
+        own = ((ps["implement"] == r["implement"]) & np.isclose(ps["a_plan_m"], r["a_plan"])
+               & np.isclose(ps["v_plan_kmh"], r["v_plan"]) & (ps["kind"] == "рабочий"))
+        m_cv = fit_models(ps[~own], p)
+        pc = power_point(r["implement"], r["a_mean"], r["v_mean"], p, m_cv)
         val.append({"implement": r["implement"], "a": r["a_plan"], "v": r["v_plan"], "P_meas": r["P_mean"],
-                    "P_model": pp["P_el"], "err_pct": 100 * (pp["P_el"] / r["P_mean"] - 1)})
+                    "P_model": pp["P_el"], "err_pct": 100 * (pp["P_el"] / r["P_mean"] - 1),
+                    "P_cv": pc["P_el"], "err_cv_pct": 100 * (pc["P_el"] / r["P_mean"] - 1)})
     val = pd.DataFrame(val)
     val.to_csv(T / "model_validation.csv", index=False, encoding="utf-8-sig")
 
@@ -426,6 +453,8 @@ def main():
         "weights_entropy": we, "weights": wc, "breakeven_T_year": be,
         "src_R2": {sc: src[sc][1] for sc in SCEN},
         "validation_mape": float(val["err_pct"].abs().mean()),
+        "validation_mape_cv": float(val["err_cv_pct"].abs().mean()),
+        "validation_max_cv": float(val["err_cv_pct"].abs().max()),
         "anova": {f"{k[0]}|{k[1]}": v.to_dict(orient="list") for k, v in av.items()},
     }
     (ROOT / "results" / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=1, default=float))

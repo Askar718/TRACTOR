@@ -71,3 +71,14 @@ class Data:
 
     def ses_row(self, key):
         return self.ses[self.ses.session == key].iloc[0]
+
+
+def rng(s, d=0, k=1.0):
+    """Диапазон «мин–макс» значений s (с множителем k); одно значение, если границы совпадают."""
+    v = np.asarray(list(s), float) * k
+    v = v[np.isfinite(v)]
+    lo, hi = f(v.min(), d), f(v.max(), d)
+    if lo == hi:
+        return lo
+    # при отрицательной нижней границе тире неоднозначно со знаком минус – используется многоточие
+    return f"{lo}…{hi}" if lo.startswith("−") else f"{lo}–{hi}"

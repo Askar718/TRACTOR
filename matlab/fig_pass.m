@@ -1,5 +1,5 @@
 function fig_pass(which)
-% Запись учётного прохода: мощность, ток двигателя хода, частота вращения.
+% Запись учётного прохода: мощность, ток тягового электродвигателя, частота вращения.
 C = rp_init();
 if strcmp(which, 'cult'), D = rp_read('pass_cult'); else, D = rp_read('pass_till'); end
 s = D.stage == 1;

@@ -152,20 +152,24 @@ def shift_model(r, p, turn):
     # --- электротрактор
     e_bat_ha = r["P_el"] * (1 / W0) + n_turn * turn["P_kW"] * turn["t_s"] / 3600  # кВт·ч/га из батареи
     E_use = p["E_bat_kWh"] * (p["SOC_max"] - p["SOC_min"]) / 100
-    t_auton = E_use / (e_bat_ha / t_ha)                 # ч непрерывной работы на одной зарядке
+    t_auton = E_use / (e_bat_ha / t_ha)                 # ч непрерывной работы без подзарядки
     t_charge_full = E_use / (p["eta_ch"] * p["eta_bat"]) / p["P_ch_ac"]
-    # имитация смены: переезд к полю, работа до SOC_min, переезд на зарядку, зарядка, возврат
+    # имитация смены: переезд к полю, работа до SOC_min (или до выполнения сменного задания),
+    # переезд на зарядку, зарядка, возврат; при заданном S_task работа прекращается по его выполнении
+    S_task = p.get("S_task") or 0.0
     t, area, E_bat_tr, n_ch = t_tr, 0.0, E_tr, 0
     E_avail = E_use - E_tr
     while True:
         need_back = E_tr
         t_work = min((E_avail - need_back) / (e_bat_ha / t_ha), T_av - t - t_tr)
+        if S_task > 0:
+            t_work = min(t_work, (S_task - area) * t_ha)
         if t_work <= 0:
             break
         area += t_work / t_ha
         t += t_work
         E_avail -= t_work * e_bat_ha / t_ha
-        if T_av - t - t_tr <= 1e-6:
+        if T_av - t - t_tr <= 1e-6 or (S_task > 0 and area >= S_task - 1e-9):
             break
         # зарядка в течение смены целесообразна, если после неё остаётся время на работу
         t_left = T_av - t - 2 * t_tr
@@ -197,6 +201,9 @@ def shift_model(r, p, turn):
     t_work_D = T_av - 2 * t_tr
     n_ref = max(0.0, (t_work_D * Q_avg + 2 * t_tr * Q_tr) / p["tank_D"] - 1)  # дозаправок в смену
     t_work_D -= n_ref * p["t_refuel_h"]
+    if S_task > 0 and S_task * t_ha < t_work_D:          # сменное задание выполнено раньше конца смены
+        t_work_D = S_task * t_ha
+        n_ref = max(0.0, (t_work_D * Q_avg + 2 * t_tr * Q_tr) / p["tank_D"] - 1)
     res["S_shift_D"] = t_work_D / t_ha
     res["q_ha"] = q_ha + 2 * t_tr * Q_tr / res["S_shift_D"]
     res["t_auton_D"] = t_auton_D
@@ -268,7 +275,7 @@ CRITERIA = [
     ("I5", "Технологические", "Запас мощности", "%", +1),
     ("I6", "Экономические", "Удельные прямые эксплуатационные затраты", "тг/га", -1),
     ("I7", "Экономические", "Удельные совокупные затраты", "тг/га", -1),
-    ("I8", "Экологические", "Удельные выбросы CO₂ с учётом производства энергии", "кг/га", -1),
+    ("I8", "Экологические", "Удельные выбросы CO₂ с учётом производства электроэнергии", "кг/га", -1),
     ("I9", "Экологические", "Удельные выбросы CO₂ в месте выполнения работ", "кг/га", -1),
     ("I10", "Автономность", "Доля сменного задания, выполняемая без восполнения энергии", "–", +1),
 ]
@@ -280,8 +287,8 @@ def indicators(r, s, e, p):
     равно сменной выработке дизельного аналога (машина загружена на всю смену)."""
     S_task = p.get("S_task") or s["S_shift_D"]
     s["S_task"] = S_task
-    A_aut_ET = s["t_auton_ET"] / s["t_ha"]   # га, обрабатываемые на одной зарядке
-    A_aut_D = s["t_auton_D"] / s["t_ha"]     # га, обрабатываемые на одной заправке
+    A_aut_ET = s["t_auton_ET"] / s["t_ha"]   # га, обрабатываемые без подзарядки
+    A_aut_D = s["t_auton_D"] / s["t_ha"]     # га, обрабатываемые без дозаправки
     ET = {
         "I1": s["e_grid_ha"] * 3.6,
         "I2": s["e_grid_ha"] * 3.6 * p["PEF_el"],
